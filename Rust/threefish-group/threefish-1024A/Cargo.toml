@@ -1,0 +1,23 @@
+[package]
+name        = "threefish_cli"
+version     = "0.1.0"
+edition     = "2021"
+description = "Threefish‑1024 + HMAC‑SHA‑256 CLI file encryptor/decryptor"
+license     = "MIT"
+
+[dependencies]
+# ── CLI ───────────────────────────────────────────────────────────────────────
+clap         = { version = "4.5.40", features = ["derive"] }
+
+# ── Cryptography ──────────────────────────────────────────────────────────────
+threefish    = "0.5.2"
+hmac         = "0.12.1"
+sha2         = "0.10.8"
+zeroize      = "1.8.1"
+
+# Robust, mainstream RNG line (OsRng ↔ RngCore works out‑of‑the‑box)
+rand         = "0.8.5"          # ← only change that really matters
+
+# ── Misc utility ─────────────────────────────────────────────────────────────
+anyhow       = "1.0.98"
+tempfile     = "3.20.0"
