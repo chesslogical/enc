@@ -1,107 +1,132 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Threefish CLI - File Encryption Tool</title>
+  <title>Threefish CLI — Encryption Tool</title>
   <style>
-    body {
-      font-family: system-ui, sans-serif;
-      background-color: #f4f4f4;
-      padding: 2em;
-      max-width: 800px;
-      margin: auto;
-      color: #333;
-    }
-    h1, h2 {
-      color: #444;
-    }
-    code {
-      background-color: #eee;
-      padding: 2px 4px;
-      border-radius: 4px;
-      font-family: monospace;
-    }
-    pre {
-      background-color: #eee;
-      padding: 1em;
-      border-radius: 6px;
-      overflow-x: auto;
-    }
-    .note {
-      background-color: #fff8dc;
-      border-left: 4px solid #f0ad4e;
-      padding: 1em;
-      margin: 1em 0;
-    }
-    footer {
-      margin-top: 3em;
-      font-size: 0.9em;
-      color: #666;
-    }
+    body { font-family: sans-serif; max-width: 800px; margin: 2em auto; line-height: 1.6; }
+    pre { background: #f4f4f4; padding: 1em; overflow-x: auto; }
+    code { font-family: monospace; }
+    h1, h2, h3 { color: #333; }
+    .section { margin-bottom: 2em; }
   </style>
 </head>
 <body>
 
-<h1>🔐 Threefish CLI</h1>
-<p>A lightweight, secure command-line tool for encrypting and decrypting files using the <strong>Threefish1024</strong> cipher with <strong>HMAC-SHA256</strong> authentication.</p>
+  <h1>Threefish CLI</h1>
+  <p>
+    A lightweight command‑line tool to encrypt and decrypt files <strong>in-place</strong> 
+    using the Threefish‑1024 block cipher in CTR mode, authenticated by HMAC‑SHA256.
+  </p>
 
-<hr>
+  <div class="section">
+    <h2>How it works</h2>
+    <ol>
+      <li><strong>Key file</strong>: <code>key.key</code> (160 bytes):<br>
+        • First 128 bytes = Threefish‑1024 key<br>
+        • Next 32 bytes  = HMAC‑SHA256 key
+      </li>
+      <li><strong>Header</strong> (13 bytes):
+        <pre>
+MAGIC     = "T1FS"      (4 bytes)
+VERSION   = 0x01        (1 byte)
+NONCE     = u64 LE‑encoded (8 bytes)
+        </pre>
+      </li>
+      <li><strong>Ciphertext</strong>:
+        <ul>
+          <li>File is read in 128‑byte blocks.</li>
+          <li>For block _i_, keystream = Threefish1024<sub>key</sub>(counter=_i_, tweak=(nonce,_i_)).</li>
+          <li>Plain⊕keystream → ciphertext.</li>
+        </ul>
+      </li>
+      <li><strong>Authentication</strong>:
+        <ul>
+          <li>HMAC‑SHA256 is computed over (header ∥ ciphertext).</li>
+          <li>32‑byte MAC appended at end.</li>
+        </ul>
+      </li>
+      <li><strong>Safe in‑place update</strong>:
+        <ul>
+          <li>Writes to a temp file.</li>
+          <li>On success, atomically renames it over the original.</li>
+        </ul>
+      </li>
+    </ol>
+  </div>
 
-<h2>🚀 Features</h2>
-<ul>
-  <li>Uses <code>Threefish-1024</code> block cipher as a stream cipher</li>
-  <li>Encrypts and decrypts files in-place</li>
-  <li>Verifies file integrity and authenticity with <code>HMAC-SHA256</code></li>
-  <li>Secure key handling using <code>zeroize</code></li>
-  <li>Cross-platform, no unsafe code</li>
-</ul>
+  <div class="section">
+    <h2>Installing &amp; Building</h2>
+    <pre><code>git clone https://your.repo/threefish_cli.git
+cd threefish_cli
+cargo build --release</code></pre>
+  </div>
 
-<h2>🧪 Requirements</h2>
-<ul>
-  <li>A key file named <code>key.key</code> in the same directory as the binary</li>
-  <li>Key must be exactly <strong>160 bytes</strong></li>
-</ul>
+  <div class="section">
+    <h2>Key Generation</h2>
 
-<pre><code>160 bytes total:
-- First 128 bytes: Encryption key (Threefish)
-- Last 32 bytes:   HMAC key (SHA256)</code></pre>
+    <h3>Linux/macOS</h3>
+    <pre><code># 128 B Threefish key + 32 B HMAC key = 160 B
+dd if=/dev/urandom bs=160 count=1 of=key.key
+</code></pre>
 
-<div class="note">
-  <strong>Note:</strong> You can generate a secure 160-byte key using a separate keygen tool or <code>/dev/urandom</code>.
-</div>
+    <h3>Windows PowerShell</h3>
+    <pre><code># Generate 160 cryptographically‑secure random bytes
+[Byte[]] $k = New-Object Byte[] 160
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($k)
+[IO.File]::WriteAllBytes("key.key", $k)
+</code></pre>
+  </div>
 
-<h2>🔧 Usage</h2>
+  <div class="section">
+    <h2>Usage</h2>
 
-<h3>Encrypt a file</h3>
-<pre><code>threefish_cli encrypt myfile.txt</code></pre>
+    <h3>Encrypting a file</h3>
+    <pre><code># In‑place encryption (backup manually first if desired)
+./target/release/threefish_cli encrypt /path/to/plain.txt
+</code></pre>
 
-<h3>Decrypt a file</h3>
-<pre><code>threefish_cli decrypt myfile.txt</code></pre>
+    <h3>Decrypting a file</h3>
+    <pre><code># Verifies HMAC before writing
+./target/release/threefish_cli decrypt /path/to/plain.txt
+</code></pre>
+  </div>
 
-<p>The tool encrypts or decrypts the file <strong>in-place</strong>. A temporary file is created and then replaces the original after success.</p>
+  <div class="section">
+    <h2>Example Session</h2>
+    <pre><code># 1) Generate key
+dd if=/dev/urandom bs=160 count=1 of=key.key
 
-<h2>🛡️ Security</h2>
-<ul>
-  <li>Each file is encrypted using a unique random nonce</li>
-  <li>HMAC-SHA256 ensures no tampering goes undetected</li>
-  <li>If authentication fails, the file will NOT be decrypted</li>
-</ul>
+# 2) Create sample
+echo "Attack at dawn!" > secret.txt
 
-<h2>❓ Troubleshooting</h2>
-<ul>
-  <li><strong>"Authentication failed"</strong>: File was modified or wrong key used</li>
-  <li><strong>"No key.key found"</strong>: Place a 160-byte key file in the same folder</li>
-</ul>
+# 3) Encrypt
+./threefish_cli encrypt secret.txt
 
-<h2>📁 Project Structure</h2>
-<pre><code>threefish_cli.exe
-key.key
-README.html
-your_files.txt</code></pre>
+# (file is now binary)
 
-<footer>
-  <p>Made with ❤️ in Rust. Secure by design. Questions or improvements? Drop a message.</p>
-</footer>
+# 4) Decrypt
+./threefish_cli decrypt secret.txt
 
+# secret.txt again contains "Attack at dawn!"
+</code></pre>
+  </div>
+
+  <div class="section">
+    <h2>Algorithm Details</h2>
+    <p>
+      • <strong>Threefish‑1024</strong> is a tweakable 1024‑bit block cipher; here we use only 128 B of output per block.<br>
+      • We treat the cipher as a stream generator: the tweak carries a random nonce and a block counter.  
+      • This ensures each block’s keystream is unique even if the same key is reused.  
+      • HMAC‑SHA256 authenticates the entire encrypted payload, protecting confidentiality and integrity.
+    </p>
+  </div>
+
+  <footer>
+    <p style="font-size:0.9em;color:#666;">
+      &copy; 2025 Threefish CLI • Released under MIT License
+    </p>
+  </footer>
 </body>
 </html>
