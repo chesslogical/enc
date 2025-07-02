@@ -1,0 +1,145 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Threefish‑1024 CLI Encryptor / Decryptor – README</title>
+<style>
+body { font-family: system-ui, sans-serif; line-height: 1.55; margin: 2rem; max-width: 900px; }
+h1, h2, h3 { line-height: 1.25; }
+pre, code { font-family: ui-monospace, monospace; background: #f4f4f4; padding: 2px 4px; border-radius: 4px; }
+pre { padding: 1rem; overflow-x: auto; }
+table { border-collapse: collapse; }
+th, td { padding: .4rem .6rem; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+
+<h1>Threefish‑1024 + HMAC‑SHA‑256 Encrypt / Decrypt Tool</h1>
+
+<p>A minimal, fast, <em>authenticated</em> file encryptor written in Rust.
+It uses the <strong>Threefish‑1024</strong> block cipher in counter‑mode
+together with an <strong>HMAC‑SHA‑256</strong> message authentication code
+(Encrypt‑then‑MAC construction).</p>
+
+<p>The command‑line interface is friction‑free: run the program on any file
+and it will <em>automatically</em> decide whether to encrypt or decrypt,
+based on a 48‑byte header that is prepended to every ciphertext produced by
+this tool.</p>
+
+<hr>
+
+<h2>Table of Contents</h2>
+<ol>
+ <li><a href="#features">Features</a></li>
+ <li><a href="#quick-start">Quick&nbsp;start</a></li>
+ <li><a href="#command-line-options">Command‑line options</a></li>
+ <li><a href="#file-format">File format</a></li>
+ <li><a href="#security-notes">Security notes &amp; caveats</a></li>
+ <li><a href="#development">Development &amp; testing</a></li>
+ <li><a href="#license">License</a></li>
+</ol>
+
+<h2 id="features">1. Features</h2>
+<ul>
+ <li>🔑 <strong>Static keyfile</strong>: 160&nbsp;bytes; first 128 B = cipher key, last 32 B = MAC key.</li>
+ <li>🪶 <strong>Zero dependencies at runtime</strong> – linked via <code>musl</code> you get a single static binary.</li>
+ <li>🧠 <strong>Auto‑detect</strong> mode: decrypts when a valid header is present, otherwise encrypts.</li>
+ <li>💪 <strong>Authenticated</strong>: tampering is detected before any decryption happens.</li>
+ <li>🔄 <strong>In‑place</strong> processing with atomic rename (Windows‑safe).</li>
+ <li>💻 <code>--encrypt</code> / <code>--decrypt</code> flags to override detection, plus <code>--quiet</code>.</li>
+</ul>
+
+<h2 id="quick-start">2. Quick start</h2>
+
+<pre><code># 1) Generate a random 160‑byte key
+$ head -c 160 /dev/urandom &gt; key.key
+
+# 2) Build the tool (requires Rust 1.70+)
+$ cargo build --release
+
+# 3) Encrypt a file in place
+$ ./target/release/threefish secret.txt
+secret.txt → encrypted
+
+# 4) Decrypt it back
+$ ./target/release/threefish secret.txt
+secret.txt → decrypted
+</code></pre>
+
+<h2 id="command-line-options">3. Command‑line options</h2>
+
+<table>
+<thead><tr><th>Flag</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>&lt;FILE&gt;</code></td><td>Path to the file you want to process.</td></tr>
+<tr><td><code>--encrypt</code></td><td>Force encryption even if the tool thinks the file is ciphertext.</td></tr>
+<tr><td><code>--decrypt</code></td><td>Force decryption (opposite of <code>--encrypt</code>).</td></tr>
+<tr><td><code>-q</code>, <code>--quiet</code></td><td>Suppress the “foo → encrypted/decrypted” status line.</td></tr>
+</tbody>
+</table>
+
+<h2 id="file-format">4. File format</h2>
+
+<pre><code>+-------------------- 48 bytes --------------------+---------+----------+
+|  Magic  |Ver|CID|MID|Res|   Nonce   |  Reserved  |Ciphertext|   MAC    |
+| "T1FS"  | 1 |01 |01 | 0 | uint64 BE | 32 × 0x00 |   ...    | 32 B HMAC|
++---------+---+---+---+---+-----------+-----------+----------+----------+
+</code></pre>
+
+<ul>
+ <li><strong>Magic</strong> = <code>54&nbsp;31&nbsp;46&nbsp;53</code> (<code>"T1FS"</code>)</li>
+ <li><strong>Ver</strong> = 1</li>
+ <li><strong>CID</strong> = 0x01 (Threefish‑1024 stream)</li>
+ <li><strong>MID</strong> = 0x01 (HMAC‑SHA‑256)</li>
+ <li><strong>Nonce</strong> = 64‑bit random counter prefix (big‑endian)</li>
+ <li><strong>MAC</strong> = HMAC‑SHA‑256 over header&nbsp;+ ciphertext</li>
+</ul>
+
+<p>The nonce and a monotone 64‑bit block counter form the 128‑bit tweak input
+for each Threefish block, turning it into a counter‑mode stream cipher.</p>
+
+<h2 id="security-notes">5. Security notes &amp; caveats</h2>
+<ul>
+ <li>This build has <em>no KDF</em> or pass‑phrase support. You must protect
+     <code>key.key</code> with the same care you would give to any raw key material.</li>
+ <li>Nonce reuse with the same key <strong>breaks confidentiality</strong>. This
+     tool generates a fresh 64‑bit nonce every encryption, giving
+     2<sup>64</sup> expected security, but do not encrypt in parallel with a
+     shared key &amp; external nonces.</li>
+ <li>Authenticated encryption is <em>encrypt‑then‑MAC</em>; ciphertext integrity
+     is verified <strong>before</strong> decryption to avoid oracle attacks.</li>
+ <li>The implementation uses <code>zeroize</code> to wipe key material from
+     memory when it goes out of scope, but <em>OS‑level</em> paging or crash
+     dumps can still leak data.</li>
+ <li>Threefish‑1024 is a mature design from the Skein hash‑function
+     submission, but is less reviewed than AES. Evaluate suitability for
+     your threat model.</li>
+</ul>
+
+<h2 id="development">6. Development &amp; testing</h2>
+
+<pre><code># Run unit tests
+$ cargo test
+
+# Build a fully static binary (Linux)
+$ RUSTFLAGS="-C target-feature=+crt-static"   cargo build --release --target x86_64-unknown-linux-musl
+</code></pre>
+
+<p><strong>Crate dependencies</strong> (as of July 2025):</p>
+
+<ul>
+ <li><code>threefish</code> – pure‑Rust implementation</li>
+ <li><code>hmac</code> + <code>sha2</code></li>
+ <li><code>clap</code>, <code>anyhow</code>, <code>rand</code>, <code>tempfile</code>, <code>zeroize</code></li>
+</ul>
+
+<h2 id="license">7. License</h2>
+<p>Dual‑licensed under <a href="https://opensource.org/licenses/MIT">MIT</a> or
+<a href="https://www.apache.org/licenses/LICENSE-2.0">Apache‑2.0</a> at your
+choice — see <code>LICENSE-MIT</code> and <code>LICENSE-APACHE</code>.</p>
+
+<hr>
+<p style="font-size:smaller">© 2025 Threefish CLI Authors</p>
+</body>
+</html>
