@@ -1,1 +1,1 @@
-A huge collection of encryption apps that ai (chat gpt)  made. 
+A huge collection of encryption apps that ai (chat gpt) made. Since ai gets better with time, lots of the apps here will change for the better. In other words, if you like a particular app you had better make your own copy of it because all the apps here are subject being updated at any time. I do not use versioning, i simply update the main codebase. 
