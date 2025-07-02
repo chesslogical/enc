@@ -2,28 +2,29 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Threefish CLI — Reference</title>
+  <title>Threefish CLI — Encryption Tool Reference</title>
   <style>
     body { font-family: sans-serif; max-width: 800px; margin: 2em auto; line-height: 1.6; }
     pre { background: #f4f4f4; padding: 1em; overflow-x: auto; }
     code { font-family: monospace; }
     h1, h2, h3 { color: #333; }
     .section { margin-bottom: 2em; }
+    ul { margin-left: 1.2em; }
   </style>
 </head>
 <body>
 
   <h1>Threefish CLI — Encryption Tool Reference</h1>
-  <p>A versatile command-line tool offering two modes of operation: <strong>raw key file</strong> (160 B key) and <strong>passphrase</strong> (Argon2id-KDF). Supports Threefish‑1024 in CTR mode plus HMAC‑SHA256.</p>
+  <p>A versatile command-line tool that offers two modes of operation: <strong>raw key file</strong> (160 B key) and <strong>passphrase</strong> (Argon2id‑KDF). Uses Threefish‑1024 in CTR mode plus HMAC‑SHA256 for authenticate-encrypt.</p>
 
   <div class="section">
     <h2>Features</h2>
     <ul>
-      <li><strong>Dual key modes</strong>: raw keyfile (<code>--keyfile</code>) or passphrase (<code>--password</code>).</li>
-      <li><strong>Authenticated encryption</strong>: Threefish‑1024‑CTR + HMAC‑SHA256 (Encrypt‑then‑MAC).</li>
-      <li><strong>Streaming & in‑place</strong>: fixed 128 B blocks, temp file → atomic replace (Windows-safe).</li>
-      <li><strong>Zeroization</strong>: all key material wiped from memory after use.</li>
-      <li><strong>Salt & nonce</strong>: per‑file 16 B salt + 8 B nonce for uniqueness.</li>
+      <li><strong>Dual key modes:</strong> raw keyfile (<code>--keyfile</code>) or passphrase (<code>--password</code>).</li>
+      <li><strong>Authenticated encryption:</strong> Threefish‑1024‑CTR + HMAC‑SHA256 (Encrypt‑then‑MAC).</li>
+      <li><strong>Streaming & in‑place:</strong> fixed 128 B blocks, writes to temp file then atomically replaces the original.</li>
+      <li><strong>Zeroization:</strong> all key material wiped from memory after use.</li>
+      <li><strong>Per‑file salt & nonce:</strong> 16 B salt + 8 B nonce ensure unique keys for each file.</li>
     </ul>
   </div>
 
@@ -31,24 +32,26 @@
     <h2>Modes of Operation</h2>
 
     <h3>Raw Key File Mode</h3>
-    <p>Supply a 160-byte file (<code>--keyfile key.key</code>) that contains 128 B Threefish key + 32 B HMAC key.</p>
+    <p>Supply a 160-byte file (<code>--keyfile key.key</code>) containing:<br>
+       • 128 B Threefish key<br>
+       • 32 B HMAC key
+    </p>
 
     <h3>Passphrase Mode</h3>
-    <p>Invoke <code>--password</code> to be prompted for a passphrase. Internally:
-      <ol>
-        <li>Generate 16-byte random salt.</li>
-        <li>Derive a 160 B key (128 B cipher + 32 B HMAC) via Argon2id(passphrase, salt).</li>
-        <li>Embed salt in header for decryption.</li>
-      </ol>
-    </p>
+    <p>Use <code>--password</code> to enter a passphrase. Internally:</p>
+    <ol>
+      <li>Generate a 16-byte random salt.</li>
+      <li>Derive a 160 B key (128 B cipher + 32 B HMAC) via <em>Argon2id(passphrase, salt)</em>.</li>
+      <li>Embed the salt in the file header so decryption uses the same salt.</li>
+    </ol>
   </div>
 
   <div class="section">
     <h2>Header Layout</h2>
     <pre><code>4 B  | "T1FS" (magic)
 1 B  | version = 0x01
-16 B | salt (passphrase only; zero if raw key)
-8 B  | nonce (u64 LE)
+16 B | salt (passphrase mode) or zeros
+8 B  | nonce (u64 little‑endian)
 —
 ...  | ciphertext (128 B blocks of Threefish‑CTR)
 —
@@ -57,48 +60,53 @@
   </div>
 
   <div class="section">
-    <h2>Examples (secret.txt)</h2>
+    <h2>Usage Examples (secret.txt)</h2>
 
     <h3>Generate a random key file</h3>
     <pre><code># Linux/macOS:
   dd if=/dev/urandom bs=160 count=1 of=key.key
+
 # Windows PowerShell:
   $k=New-Object Byte[] 160; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($k); [IO.File]::WriteAllBytes("key.key", $k)
-    </code></pre>
+</code></pre>
 
-    <h3>Encrypt with raw key</h3>
-    <pre><code># In-place using key.key
-3f --keyfile key.key encrypt secret.txt
-    </code></pre>
+    <h3>Encrypt with raw key file</h3>
+    <pre><code>3f --keyfile key.key encrypt secret.txt</code></pre>
 
-    <h3>Decrypt with raw key</h3>
-    <pre><code>3f --keyfile key.key decrypt secret.txt
-    </code></pre>
+    <h3>Decrypt with raw key file</h3>
+    <pre><code>3f --keyfile key.key decrypt secret.txt</code></pre>
 
     <h3>Encrypt with passphrase</h3>
     <pre><code>3f --password encrypt secret.txt
-Enter encryption passphrase: ********
-    </code></pre>
+Enter encryption passphrase: ********</code></pre>
 
     <h3>Decrypt with passphrase</h3>
     <pre><code>3f --password decrypt secret.txt
-Enter decryption passphrase: ********
-    </code></pre>
+Enter decryption passphrase: ********</code></pre>
+  </div>
+
+  <div class="section">
+    <h2>Why Threefish‑1024?</h2>
+    <p>Threefish‑1024 offers a massive 1 024‑bit keyspace and block size, giving an astronomically large brute‑force barrier:</p>
+    <ul>
+      <li><strong>Key size:</strong> 2¹⁰²⁴ possible keys vs 2²⁵⁶ for AES‑256.</li>
+      <li><strong>Block size:</strong> 1 024 bits reduces keystream reuse in very large files.</li>
+      <li><strong>Tweakable design:</strong> nonce+block counter tweak for unique per‑block streams.</li>
+    </ul>
+    <p><em>Note:</em> When derived from a passphrase, your real security is limited by the passphrase’s entropy and Argon2 cost, not by the cipher’s key size.</p>
   </div>
 
   <div class="section">
     <h2>Security Discussion</h2>
-    <p><strong>Algorithm strength</strong>: Threefish‑1024 uses a 1 024‑bit key/block but its cryptanalytic margin is tuned to ~256‑bit security—the same “effective” level as AES‑256 or ChaCha20.</p>
-    <p><strong>Key size vs. passphrase</strong>: Expanding a human passphrase into a larger key does <em>not</em> increase entropy. Your security is limited by the passphrase’s real entropy and the cost per Argon2 guess.</p>
-    <p><strong>Brute-force resistance</strong>: A truly random 1 024‑bit key is far out of reach of any attacker (2¹⁰²⁴ possibilities), but when you derive it from a passphrase, the attacker’s workload is “number of passphrase guesses” × “KDF cost,” not the cipher key size.</p>
-    <p><strong>Best practices</strong>:
-      <ul>
-        <li>Use a high-entropy passphrase (e.g. 8+ Diceware words for ~80+ bits).</li>
-        <li>Harden Argon2 parameters (memory, iterations) so each guess is expensive.</li>
-        <li>Consider adding a stored “pepper” for added offline-attack resistance.</li>
-        <li>Use standardized AEAD (AES‑GCM / ChaCha20‑Poly1305) for hardware acceleration and audits, unless Threefish is required.</li>
-      </ul>
-    </p>
+    <p><strong>Algorithm strength:</strong> Although Threefish‑1024’s raw keyspace dwarfs AES‑256’s, both ciphers are designed to provide ~256‑bit cryptanalytic security. In practice all are beyond brute‑force for any realistic adversary.</p>
+    <p><strong>Key size vs. passphrase:</strong> Expanding a human passphrase into a larger key doesn’t increase entropy. Use high‑entropy passwords (e.g., 8+ random words) and robust Argon2 parameters (memory/time) to slow attackers.</p>
+    <p><strong>Best practices for password mode:</strong></p>
+    <ul>
+      <li>Choose an 80–100 bit entropy passphrase (Diceware or random string).</li>
+      <li>Configure Argon2id with high memory and iteration costs.</li>
+      <li>Optionally add a device-specific pepper to the KDF for offline attack resistance.</li>
+      <li>Consider standardized AEAD (AES‑GCM or ChaCha20‑Poly1305) for hardware acceleration and broad audit.</li>
+    </ul>
   </div>
 
   <footer>
