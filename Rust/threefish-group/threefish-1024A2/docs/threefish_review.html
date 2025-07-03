@@ -1,0 +1,115 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Technical Review – Threefish‑1024 + HMAC‑SHA‑256 Encryptor/Decryptor</title>
+<style>
+ body{font-family:system-ui,Arial,sans-serif;line-height:1.5;margin:2rem;max-width:900px}
+ h1,h2{margin-top:1.8rem}
+ table{border-collapse:collapse;width:100%;margin:1rem 0}
+ th,td{border:1px solid #888;padding:.4rem .6rem;text-align:left;vertical-align:top}
+ th{background:#f0f0f0}
+ code{background:#eee;padding:.1rem .2rem;border-radius:4px}
+</style>
+</head>
+<body>
+
+<h1>Focused Technical Review</h1>
+
+<p>This document reviews the <em>Threefish‑1024 + HMAC‑SHA‑256</em> command‑line
+encryptor/decryptor.  It covers correctness, security, performance, ergonomics,
+and proposes optional enhancements.</p>
+
+
+<h2>1. Correctness &amp; Cryptographic Soundness</h2>
+
+<table>
+<thead><tr><th>Component</th><th>Assessment</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><strong>Key handling</strong></td><td>✅</td><td>160‑byte key file is parsed once, split correctly, and wrapped in <code>Zeroizing</code>, ensuring key material is wiped on drop.</td></tr>
+<tr><td><strong>Mode detection</strong></td><td>✅</td><td>If magic/version don’t match, the tool encrypts instead of decrypting. Header‑length check prevents treating tiny files as ciphertext.</td></tr>
+<tr><td><strong>Header format</strong></td><td>✅</td><td>4‑byte magic, 1‑byte version, IDs, 8‑byte nonce, 32‑byte reserved = 48 B constant size. Good for forwards compatibility.</td></tr>
+<tr><td><strong>Nonce</strong></td><td>✅</td><td><code>OsRng</code> generates a fresh 64‑bit nonce per file; probability of reuse is negligible.</td></tr>
+<tr><td><strong>Stream construction</strong></td><td>✅</td><td>Counter mode built from Threefish with tweak = [nonce, block_idx] gives IND‑CPA security.</td></tr>
+<tr><td><strong>Encrypt‑then‑MAC</strong></td><td>✅</td><td>HMAC‑SHA‑256 over header || ciphertext; tag verified before any plaintext release.</td></tr>
+<tr><td><strong>Authentication failure behaviour</strong></td><td>✅</td><td>Returns error and never touches the file.</td></tr>
+<tr><td><strong>Tests</strong></td><td>👍</td><td>Round‑trip test covers small payloads and external key file, but see §5 for more cases.</td></tr>
+</tbody>
+</table>
+
+<p>The design is <strong>sound</strong> for an offline file‑at‑rest encryptor: IND‑CPA from Threefish counter mode and INT‑CTXT from EtM HMAC.</p>
+
+
+<h2>2. Performance Considerations</h2>
+
+<table>
+<thead><tr><th>Observation</th><th>Impact</th><th>Suggested tweak</th></tr></thead>
+<tbody>
+<tr><td><code>Threefish1024::new_with_tweak_u64</code> is called once per block</td><td>Key setup is relatively heavy; on large files this dominates runtime.</td><td>Cache the <code>Threefish1024</code> object and change only the tweak via <code>set_tweak_u64</code>.</td></tr>
+<tr><td><code>xor_keystream</code> reconstructs each word for every byte</td><td>Micro‑inefficient (16 K tiny copies per block)</td><td>Pre‑convert the 1024‑bit keystream into a 128‑byte array once, then XOR with <code>zip</code>.</td></tr>
+<tr><td>MAC verification re‑reads the ciphertext</td><td>2× disk I/O</td><td>Read, verify, and decrypt in a single pass—buffer plaintext until tag check succeeds.</td></tr>
+</tbody>
+</table>
+
+
+<h2>3. Robustness &amp; User Experience</h2>
+
+<ul>
+<li><strong>Atomic replacement (Windows)</strong> – you delete first to avoid <code>ERROR_ACCESS_DENIED</code>.  
+  <em>Edge case</em>: if encryption fails mid‑way the original file is gone. Rename it to “file.bak” first so recovery is possible.</li>
+<li><strong>Key‑file location</strong> – hard‑coding <code>key.key</code> is brittle. Offer <code>--keyfile PATH</code> or <code>KEYFILE</code> env var.</li>
+<li><strong>Permissions check</strong> – warn if <code>key.key</code> is world‑readable (<code>mode &amp; 0o077 != 0</code>).</li>
+<li><strong>CLI feedback</strong> – errors propagate via <code>anyhow</code>; <code>--quiet</code> only suppresses the success line. ✔️</li>
+</ul>
+
+
+<h2>4. Security Hardening Opportunities</h2>
+
+<table>
+<thead><tr><th>Area</th><th>Rationale</th><th>Improvement</th></tr></thead>
+<tbody>
+<tr><td>Constant‑time tag compare</td><td>HMAC API already constant‑time.</td><td>Nothing required ✔️</td></tr>
+<tr><td>File wiping on failure</td><td>Deters forensic recovery revealing an attempted decryption.</td><td>Optionally zero or delete the file when authentication fails.</td></tr>
+<tr><td>Nonce collision log</td><td>64‑bit random is fine, but logging helps guarantee uniqueness in batch jobs.</td><td>Maintain a small rolling log of recent nonces.</td></tr>
+</tbody>
+</table>
+
+
+<h2>5. Additional Tests Worth Adding</h2>
+
+<ol>
+<li><strong>Large data</strong> – ≥ 1 GiB to catch block‑counter overflow or buffering bugs.</li>
+<li><strong>Non‑multiple‑of‑block</strong> lengths – e.g. <code>BLOCK_SIZE + 17</code>.</li>
+<li><strong>MAC failure path</strong> – flip a bit; assert that decryption errors and file is untouched.</li>
+<li><strong>Header version bump</strong> – create a header with <code>VERSION+1</code>; ensure autodetect decides to encrypt.</li>
+</ol>
+
+
+<h2>6. Optional Feature Road‑Map</h2>
+
+<table>
+<thead><tr><th>Feature</th><th>Effort</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>Parallelism</td><td>Medium</td><td>Counter modes parallelise easily. <code>rayon</code> can yield 4–8× throughput on SSDs.</td></tr>
+<tr><td>Password‑derived keys</td><td>Medium</td><td>Add <code>scrypt</code> or <code>Argon2</code> so users needn’t store a raw 160‑byte key.</td></tr>
+<tr><td>Associated data (AAD)</td><td>Low</td><td>Accept <code>--aad</code>; include the bytes in the MAC and store length‑prefixed AAD in header.</td></tr>
+<tr><td>Metadata preservation</td><td>Low</td><td>Copy original <em>mtime</em>/<em>atime</em>/permissions back after rename.</td></tr>
+<tr><td>Streaming stdin→stdout mode</td><td>Medium</td><td>Great for piping but sacrifices atomic writes and size detection.</td></tr>
+</tbody>
+</table>
+
+
+<h2>Summary</h2>
+
+<p>The implementation is already safe and functional.  The single
+highest‑impact improvement is <strong>caching the Threefish key schedule</strong>,
+which can halve CPU time on gigabyte‑scale files.  Secondary wins come from a
+single‑pass MAC‑then‑decrypt path and small ergonomic touches (configurable
+key path, permission checks).</p>
+
+<p><em>Need sample patches or a deeper dive into Threefish tweak usage? Feel free
+to ask.</em></p>
+
+</body>
+</html>
