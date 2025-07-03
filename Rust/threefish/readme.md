@@ -1,496 +1,169 @@
-# threefish_cli
+# Threefish CLI – Authenticated Stream‑Cipher File Encryptor
 
+SIMPLE! Runs on one command, the file to process, and it encrypts or encrypts it automatically! 
 
-
-\*\*Threefish-1024 + HMAC-SHA-256 CLI File Encryptor/Decryptor\*\*
-
-
-
-A lightweight, high-security command-line utility to encrypt and decrypt files using the Threefish-1024 stream cipher combined with HMAC-SHA-256 authentication. It operates in a streaming fashion, supports atomic file replacement with backups, and keeps cryptographic keys in an external key file.
-
-
+A minimal, no‑nonsense command‑line utility that transparently **encrypts and decrypts files in‑place** using a Threefish‑1024 stream cipher and HMAC‑SHA‑256 authentication.
 
 ---
 
+## ✨ Features
 
-
-\## Table of Contents
-
-
-
-1\. \[Features](#features)
-
-2\. \[Getting Started](#getting-started)
-
-
-
-&nbsp;  \* \[Prerequisites](#prerequisites)
-
-&nbsp;  \* \[Installation](#installation)
-
-3\. \[Usage](#usage)
-
-
-
-&nbsp;  \* \[Basic Commands](#basic-commands)
-
-&nbsp;  \* \[Options](#options)
-
-4\. \[File Format \& Header](#file-format--header)
-
-5\. \[Key File](#key-file)
-
-6\. \[Design \& Internals](#design--internals)
-
-
-
-&nbsp;  \* \[One-Pass Decryption](#one-pass-decryption)
-
-&nbsp;  \* \[StreamCipher Implementation](#streamcipher-implementation)
-
-&nbsp;  \* \[Typed Header Struct](#typed-header-struct)
-
-&nbsp;  \* \[Zeroizing Sensitive Buffers](#zeroizing-sensitive-buffers)
-
-7\. \[Error Handling](#error-handling)
-
-8\. \[Security Considerations](#security-considerations)
-
-
-
-&nbsp;  \* \[Nonce Uniqueness](#nonce-uniqueness)
-
-&nbsp;  \* \[MAC Verification](#mac-verification)
-
-&nbsp;  \* \[Atomic File Replacement](#atomic-file-replacement)
-
-9\. \[Performance Optimizations](#performance-optimizations)
-
-10\. \[Testing](#testing)
-
-11\. \[Contributing](#contributing)
-
-12\. \[License](#license)
-
-
+* **Strong encryption** – 1024‑bit Threefish block cipher operated in a counter‑style stream mode.
+* **Built‑in authentication** – 256‑bit HMAC‑SHA‑256 covers *header + ciphertext* to prevent undetected tampering.
+* **Nonce‑based keystream** – 128‑bit random nonce per file; identical plaintexts yield distinct ciphertexts.
+* **Atomic updates** – Encrypts/decrypts to a temporary file and then atomically renames, leaving a `.bak` backup of the original.
+* **Key hygiene** – Encryption and MAC keys are held in `Zeroizing` buffers so RAM is wiped on drop.
+* **Self‑detecting mode** – Omits the `-e / -d` flag if the file header already identifies ciphertext.
+* **Portable, dependency‑light** – Pure‑Rust implementation; only depends on `threefish`, `hmac`, `sha2`, and `rand`.
 
 ---
 
+## 🔐 Security Model
 
+| Property             | Details                                                                                                      |     |            |         |      |          |           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ | --- | ---------- | ------- | ---- | -------- | --------- |
+| Cipher               | Threefish‑1024 (block size = 128 bytes)                                                                      |     |            |         |      |          |           |
+| Mode                 | Counter‑like stream mode with 128‑bit nonce ‖ 64‑bit block index tweak                                       |     |            |         |      |          |           |
+| Authentication       | HMAC‑SHA‑256 over header + ciphertext                                                                        |     |            |         |      |          |           |
+| Key material         | **160 bytes** total ⇒ `key.key` file<br>  • first 128 bytes → Threefish key<br>  • last 32 bytes  → HMAC key |     |            |         |      |          |           |
+| Header (48 bytes BE) | \`"T1FS"                                                                                                     | ver | cipher\_id | mac\_id | rsvd | nonce128 | 24 rsvd\` |
+| MAC tag              | 32 bytes appended to file end                                                                                |     |            |         |      |          |           |
 
-\## Features
-
-
-
-\* \*\*Streaming Encryption \& Decryption\*\*: Processes files in constant memory, ideal for large files.
-
-\* \*\*Authenticated Encryption\*\*: Uses HMAC-SHA-256 to ensure integrity and authenticity.
-
-\* \*\*Atomic Replacement\*\*: Writes to a temporary file and renames with a `.bak` backup on success.
-
-\* \*\*External Keyfile\*\*: Keeps a 160-byte key file (`128 B` cipher key + `32 B` MAC key) out-of-band.
-
-\* \*\*Progressive CLI\*\*: Built with `clap` derive for ergonomic flags, `--help`, and `--version`.
-
-\* \*\*Zeroized Buffers\*\*: Sensitive data is zeroed on drop to reduce in-memory exposure.
-
-\* \*\*Typed Header\*\*: Clear representation of file header fields with field-wise validation.
-
-\* \*\*One-Pass Decryption\*\*: Verifies and decrypts in a single streaming pass, halving I/O.
-
-
+> **Threat model**: designed to safeguard at‑rest file contents against disclosure or alteration by an offline adversary. It does **not** provide deniability or forward secrecy and assumes the key file stays secret.
 
 ---
 
-
-
-\## Getting Started
-
-
-
-\### Prerequisites
-
-
-
-\* \*\*Rust toolchain\*\*: Rust 1.65+ (with `cargo`)
-
-\* \*\*Operating System\*\*: Cross-platform (Windows, macOS, Linux)
-
-
-
-\### Installation
-
-
+## 🏗️ Building
 
 ```bash
-
-\# Clone the repository
-
-git clone https://github.com/yourusername/threefish\_cli.git
-
-cd threefish\_cli
-
-
-
-\# Build the release binary
-
+# Requires stable Rust ≥ 1.76
 cargo build --release
-
-
-
-\# (Optional) Install to your Cargo bin directory
-
-cargo install --path .
-
 ```
 
-
-
-After installation, the `threefish\_cli` executable will be available in your `$PATH`.
-
-
+The resulting binary will be at `target/release/threefish_cli`.
 
 ---
 
+## 🔑 Generating a Key File
 
-
-\## Usage
-
-
-
-```text
-
-threefish\_cli \[OPTIONS] <FILE>
-
-```
-
-
-
-\### Basic Commands
-
-
-
-\* \*\*Encrypt a file\*\* (auto-detect or force):
-
-
-
-&nbsp; ```bash
-
-&nbsp; threefish\_cli --encrypt secret.txt
-
-&nbsp; ```
-
-\* \*\*Decrypt a file\*\* (auto-detect or force):
-
-
-
-&nbsp; ```bash
-
-&nbsp; threefish\_cli --decrypt secret.txt.enc
-
-&nbsp; ```
-
-\* \*\*Auto-detect mode\*\* (inspect header):
-
-
-
-&nbsp; ```bash
-
-&nbsp; threefish\_cli data.bin
-
-&nbsp; ```
-
-
-
-\### Options
-
-
-
-| Flag              | Description                                       |
-
-| ----------------- | ------------------------------------------------- |
-
-| `-e`, `--encrypt` | Force encryption mode (treat input as plaintext)  |
-
-| `-d`, `--decrypt` | Force decryption mode (treat input as ciphertext) |
-
-| `-h`, `--help`    | Print help information                            |
-
-| `-V`, `--version` | Print version information                         |
-
-
-
----
-
-
-
-\## File Format \& Header
-
-
-
-All ciphertext files produced by `threefish\_cli` begin with a fixed-size 48 B header:
-
-
-
-```text
-
-Offset | Length | Field
-
--------|--------|----------------------------
-
-0x00   | 4      | Magic (`"T1FS"`)
-
-0x04   | 1      | Version (`0x01`)
-
-0x05   | 1      | Cipher ID (`0x01` for Threefish1024)
-
-0x06   | 1      | MAC ID (`0x01` for HMAC-SHA256)
-
-0x07   | 1      | Reserved (zero)
-
-0x08   | 16     | Nonce (128‑bit)
-
-0x18   | 24     | Reserved (zero)
-
-```
-
-
-
-After the header:
-
-
-
-1\. \*\*Ciphertext stream\*\* encrypted via Threefish1024 in counter-tweak mode.
-
-2\. \*\*32 byte\*\* HMAC-SHA256 tag authenticating header + ciphertext.
-
-
-
----
-
-
-
-\## Key File
-
-
-
-The key file (`key.key`) must be exactly \*\*160 bytes\*\*:
-
-
-
-\* \*\*First 128 bytes\*\*: Threefish1024 cipher key.
-
-\* \*\*Next 32 bytes\*\*: HMAC-SHA256 key.
-
-
-
-\*No keyfile generation is provided by this utility\*; supply your own, or use a companion tool that writes 160 cryptographically-random bytes.
-
-
-
----
-
-
-
-\## Design \& Internals
-
-
-
-\### One-Pass Decryption
-
-
-
-Instead of reading the file twice (MAC verify then decrypt), we:
-
-
-
-1\. Initialize HMAC and Threefish stream cipher with extracted nonce.
-
-2\. For each chunk of ciphertext:
-
-
-
-&nbsp;  \* Update HMAC.
-
-&nbsp;  \* Decrypt in-place.
-
-&nbsp;  \* Write plaintext to temp file.
-
-3\. After streaming, read on-disk MAC tag and verify.
-
-4\. If successful, atomically replace original file with plaintext.
-
-
-
-This halves disk I/O and simplifies retries on failure.
-
-
-
-\### StreamCipher Implementation
-
-
-
-\* \*\*Keystream buffers\*\* (`ks\_words`, `keystream`) are allocated once and wrapped in `Zeroizing`.
-
-\* Counter/tweak per block: `tweak = (nonce\_hi, nonce\_lo ^ block\_idx)`.
-
-\* XOR in-place for streaming speed.
-
-
-
-\### Typed Header Struct
-
-
-
-Using a `#\[repr(C)] struct Header` ensures:
-
-
-
-\* Reserved bytes are always zero.
-
-\* Safe, field-wise validation.
-
-\* Easy `transmute` to/from byte arrays without per-field copying.
-
-
-
-\### Zeroizing Sensitive Buffers
-
-
-
-All ephemeral buffers that hold key material, keystream words, and plaintext chunks use `Zeroizing<T>` to clear memory when dropped.
-
-
-
----
-
-
-
-\## Error Handling
-
-
-
-\* \*\*`anyhow`\*\* for ergonomic error propagation and context.
-
-\* CLI flags auto-validate via `clap` derive (mutually-exclusive `-e/-d`).
-
-\* Detailed context on file I/O, key loading, header parsing, and MAC failures.
-
-
-
----
-
-
-
-\## Security Considerations
-
-
-
-\### Nonce Uniqueness
-
-
-
-\*\*Critical\*\*: Never reuse the same key/nonce pair. The 128-bit nonce is randomly generated with `OsRng` per encryption.
-
-
-
-\### MAC Verification
-
-
-
-The HMAC covers both the header and ciphertext.  If verification fails, decryption aborts and no data is written to the original file.
-
-
-
-\### Atomic File Replacement
-
-
-
-On success, the original file is backed up with a `.bak` extension, and the temp file is renamed. In case of crash or power loss, either the old file (`.bak`) or new file remains intact.
-
-
-
----
-
-
-
-\## Performance Optimizations
-
-
-
-1\. \*\*Reused Keystream Buffers\*\*: Avoids per-block allocations.
-
-2\. \*\*One-Pass Decrypt\*\*: Halves I/O operations.
-
-3\. \*\*Buffered I/O\*\*: 16 KiB buffer to balance syscalls vs memory use.
-
-4\. \*\*Optional Progress Bar\*\*: (Suggest `indicatif` integration) for large files.
-
-
-
----
-
-
-
-\## Testing
-
-
-
-\* \*\*Unit Tests \& Roundtrip\*\*: Small file, non-block-multiple, large (\\~2 MiB+3 bytes).
-
-\* \*\*MAC Failure Test\*\*: Flip a byte and assert decryption error.
-
-\* \*\*Property-Based/Fuzzing\*\*: (\*future\*) integrate `proptest` to validate random inputs.
-
-
-
-Run tests via:
-
-
+The program expects a 160‑byte file named **`key.key`** in the working directory.
 
 ```bash
+# Unix-like systems – using OpenSSL
+openssl rand -out key.key 160
 
-cargo test -- --nocapture
-
+# Windows (PowerShell ≥ 5)
+# NOTE: Requires OpenSSL or another random‑byte source
 ```
 
+Keep this file *secret* and *backed‑up*; losing it renders data unrecoverable.
+
+---
+
+## 🚀 Usage
+
+```text
+threefish_cli [--encrypt | --decrypt] <FILE>
+```
+
+### Examples
+
+#### Encrypt a file (explicit)
+
+```bash
+threefish_cli --encrypt secrets.db
+```
+
+Output: `secrets.db` → encrypted, original saved as `secrets.db.bak`.
+
+#### Decrypt (auto‑detect)
+
+```bash
+threefish_cli secrets.db   # header indicates ciphertext
+```
+
+If MAC verification fails, decryption aborts with `authentication failed`.
+
+> **Tip:** omit the flag to let the tool decide based on the 4‑byte magic and version.
+
+---
+
+## 🧪 Running Tests
+
+```bash
+cargo test --all-features --all-targets
+```
+
+The test‑suite covers:
+
+* Small‑file round‑trip
+* Non‑block‑aligned lengths
+* Tamper detection
+* Multi‑MiB datasets
+
+---
+
+## 📄 File Format in Detail
+
+```
+Offset  Size  Field                     Description
+0x00    4     "T1FS"                   Magic
+0x04    1     0x01                     Version
+0x05    1     0x01                     Cipher ID (Threefish1024‑Stream)
+0x06    1     0x01                     MAC ID (HMAC‑SHA‑256)
+0x07    1     Reserved (0x00)
+0x08    16    Nonce N                  128‑bit random number
+0x18    24    Reserved (zero)         For future use
+...     ...   Ciphertext              Stream‑encrypted payload
+EOF‑32  32    MAC tag T               HMAC‑SHA‑256(header ‖ ciphertext)
+```
+
+---
+
+## 🛠️ Internals & Design Notes
+
+* **StreamCipher** is a stateless helper that feeds block‑indexed tweaks into Threefish and XORs the resulting keystream.
+* **Authentication‑then‑Encrypt**: HMAC is computed *during* streaming; the plaintext never touches disk unencrypted.
+* **Temp file promotion** ensures power‑failure safety and preserves a backup copy of the previous state.
+* **Error handling** uses `anyhow::Result` for readable context‑rich messages.
+
+---
+
+## ⚠️ Caveats 
+
+* No key‑derivation or password‑based mode – relies on raw key file- that is on purpose for max security.
+* No parallelism; large files process sequentially (could adopt Rayon). (maybe later) 
+* Header reserves 24 bytes for potential algorithm agility (e.g. AEAD, Argon2 salt).
 
 
 ---
 
+## 🤝 Contributing
 
-
-\## Contributing
-
-
-
-1\. Fork the repo and create a feature branch.
-
-2\. Write tests for new functionality.
-
-3\. Submit a pull request with detailed description.
-
-4\. Ensure `cargo fmt`, `cargo clippy`, and `cargo test` all pass.
-
-
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feat/my‑feature`)
+3. Commit your changes (`git commit -am 'Add my feature'`)
+4. Push to the branch (`git push origin feat/my‑feature`)
+5. Open a Pull Request
 
 ---
 
+## 📜 License
 
+Licensed under either of
 
-\## License
+* Apache License, Version 2.0
+* MIT license
 
+at your option.
 
-
-This project is licensed under the \*\*MIT License\*\*. See \[LICENSE](LICENSE) for details.
-
-
+See `LICENSE-*` files for details.
 
 ---
 
+## 🙏 Acknowledgements
 
-
-Thank you for using `threefish\_cli`! Secure your files with confidence.
-
-
+* [Threefish cipher](https://www.schneier.com/skein/) by Niels Ferguson, Stefan Lucks, et al.
+* \[`hmac`], \[`sha2`], \[`rand`], and \[`zeroize`] crates by the RustCrypto project.
+* Inspired by OpenBSD `encrypt(1)` file‑encryption concepts.
 
