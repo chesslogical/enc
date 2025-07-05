@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>otp_xor – Hardened One‑Time‑Pad XOR Transformer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;margin:2rem;line-height:1.6}
+h1,h2,h3{color:#0b3d91}
+code,pre{background:#f4f4f4;padding:2px 4px;border-radius:4px}
+pre{overflow-x:auto;padding:1rem}
+.warning{background:#fff4e5;border-left:4px solid #ffa726;padding:.5rem 1rem}
+.ok{background:#e8f5e9;border-left:4px solid #66bb6a;padding:.5rem 1rem}
+kbd{background:#eee;border-radius:3px;padding:2px 4px;font-family:monospace}
+table{border-collapse:collapse}
+th,td{border:1px solid #ddd;padding:6px 8px;text-align:left}
+</style>
+</head>
+<body>
+
+<h1>otp_xor – Hardened One‑Time‑Pad XOR Transformer</h1>
+
+<p><strong>NOTE:</strong> This tool can provide <em>perfect secrecy</em> or be trivially broken – the outcome depends entirely on how you handle the pad.</p>
+
+<p><strong>otp_xor</strong> is a minimalist Rust utility that flips a file’s bytes by XORing them with a one‑time‑pad (OTP).  It performs the edit <em>in‑place yet crash‑safely</em>: data are streamed to a temp file, flushed, and atomically renamed over the original.</p>
+
+<div class="warning"><strong>OTP ground rules</strong>
+  <ul>
+    <li>The pad <em>must be at least as long as the data</em>.  <code>--strict‑len</code> (explained below) forces exact equality.</li>
+    <li><em>Never</em> reuse pad bytes. Once consumed, destroy them.</li>
+    <li>Default pad file is <code>key.key</code>. Override with <code>--key-file</code> or <kbd>$OTP_KEY</kbd> to keep pads on removable or volatile media.</li>
+  </ul>
+</div>
+
+<h2>Why XOR?</h2>
+<p>XOR with a secret pad is the most stripped‑down, auditable symmetric transform possible.  No ciphersuites, no IVs, no authentication tags &mdash; just raw keystream.  Its brutal simplicity is also its trap: <strong>reuse a bit of pad and you leak that bit of plaintext</strong>.</p>
+
+<h2>Features at a Glance</h2>
+<ul>
+  <li><strong>Atomic updates</strong> – temp file + <code>fsync</code> + parent‑dir sync.</li>
+  <li><strong>Exclusive lock</strong> on Unix for the whole operation (prevents race‑reads).</li>
+  <li><strong>Crash‑safe</strong> under sudden power loss.</li>
+  <li><strong>Optional SHA‑256 verify pass</strong> (<code>--features verify</code>).</li>
+  <li><strong>Optional xattr copy</strong> on Unix (<code>--features xattrs</code>).</li>
+  <li>All sensitive buffers <strong>zeroised</strong> after use.</li>
+  <li>~300 LoC; no network, no telemetry.</li>
+</ul>
+
+<h2>Quick Start</h2>
+<pre><code># 1. Build
+git clone https://example.com/otp_xor.git
+cd otp_xor
+cargo build --release
+cargo build --release --features verify     # + SHA‑256 verify
+
+# 2. Make a pad
+head -c 1048576 /dev/urandom > key.key      # 1 MiB pad (example)
+chmod 600 key.key
+
+# 3. Encrypt / decrypt (same command)
+otp_xor sample.jpg
+
+# 4. Custom pad location
+otp_xor secret.pdf --key-file /media/usb/dec2025.pad
+export OTP_KEY=/run/shm/tmp.pad
+otp_xor journal.txt
+
+# 5. Verify output (verify build only)
+otp_xor report.csv --strict-len --expect 87c4…fae1
+</code></pre>
+
+<h2>Command‑Line Reference</h2>
+<pre><code>USAGE:
+    otp_xor &lt;INPUT&gt; [OPTIONS]
+
+POSITIONAL:
+    &lt;INPUT&gt;               File to encrypt / decrypt in place
+
+OPTIONS:
+    -k, --key-file &lt;FILE&gt;  Override pad location (alias: --key)
+                            Default: ./key.key or $OTP_KEY
+        --strict-len        Require pad length == data length
+        --help              Show help
+        --version           Show version
+
+VERIFY BUILD ONLY:
+        --expect &lt;HEX&gt;      Compare SHA‑256(output) to HEX
+</code></pre>
+
+<h2>About <code>--strict‑len</code></h2>
+
+<p>This switch does <em>not</em> change cryptographic correctness &mdash; the program already aborts when the pad is shorter than the data.  Instead, it is a guard‑rail against two very common operational errors:</p>
+
+<table>
+  <tr><th>Risk scenario</th><th>Without <strong>--strict‑len</strong></th><th>With <strong>--strict‑len</strong></th></tr>
+  <tr>
+    <td><strong>Accidental pad reuse</strong></td>
+    <td>Pad longer than file is accepted; operator may later forget and start at offset 0 again, exposing both files to recovery.</td>
+    <td>Oversized pad is refused; user must cut a fresh, equal‑size pad, eliminating reuse risk.</td>
+  </tr>
+  <tr>
+    <td><strong>Audit/compliance drift</strong></td>
+    <td>Left‑over pad bytes remain on disk &mdash; auditors see “key material” still present.</td>
+    <td>Successful run guarantees pad == data &rarr; single shred/delete fully removes key.</td>
+  </tr>
+  <tr>
+    <td><strong>Automation mistakes</strong></td>
+    <td>Scripts silently pair the wrong pad with a file, consuming only part and leaving a latent flaw.</td>
+    <td>Mis‑match becomes a hard error &rarr; CI fails fast.</td>
+  </tr>
+</table>
+
+<p>If your workflow already tracks pad offsets safely (e.g.&nbsp;one huge pad on a dedicated USB stick), leave the flag <em>off</em>.  For ad‑hoc or high‑assurance use, flip it <em>on</em> to get “one pad, one file, then shred”.</p>
+
+<h2>Security Model &amp; Operator Tips</h2>
+<h3>Pad storage</h3>
+<ul>
+  <li><strong>Good:</strong> Keep <code>key.key</code> on <code>tmpfs</code> or an encrypted USB; unmount immediately after use.</li>
+  <li><strong>Better:</strong> Generate a new, exact‑size pad per file, enable <code>--strict‑len</code>, shred or physically destroy the pad afterward.</li>
+  <li><strong>Not great:</strong> Reusing pad segments or storing the pad on the same unencrypted disk.</li>
+</ul>
+
+<h3>Erasing the pad</h3>
+<p>Filesystem overwrites are unreliable on SSDs and copy‑on‑write filesystems.  Consider:</p>
+<ol>
+  <li>Avoiding writes altogether (keep pad in RAM).</li>
+  <li>The drive’s hardware “secure erase” command when you must purge an SSD.</li>
+  <li>Physical destruction for very high‑grade adversaries.</li>
+</ol>
+
+<h2>Internals in a Nutshell</h2>
+<table>
+  <tr><th>Step</th><th>What happens</th></tr>
+  <tr><td>Copy</td><td>Data &amp; pad streamed in 64 KiB chunks, XORed, written to <code>.enc_tmp.*</code>.</td></tr>
+  <tr><td>Flush</td><td><code>flush()</code> + <code>fsync()</code> on the temp file.</td></tr>
+  <tr><td>Atomic rename</td><td>On Unix: occurs while the source inode is still exclusively locked.</td></tr>
+  <tr><td>Cleanup</td><td>Timestamps restored; RAM buffers <code>zeroize</code>d.</td></tr>
+</table>
+
+<h2>Building from Source</h2>
+<pre><code>rustup update stable
+cargo build --release
+cargo clippy -- -D warnings
+cargo test              # unit + property tests
+cargo audit             # dependency CVE scan
+</code></pre>
+
+<h2>License</h2>
+<p>Dual‑licensed under <a href="https://opensource.org/licenses/MIT">MIT</a> or <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache‑2.0</a>.</p>
+
+<h2>Acknowledgements</h2>
+<p>Built on <a href="https://docs.rs/clap">clap</a>, <a href="https://docs.rs/tempfile">tempfile</a>, <a href="https://docs.rs/zeroize">zeroize</a>, and <a href="https://docs.rs/fs2">fs2</a>.</p>
+
+<div class="ok">Encrypt safely &mdash; <em>then burn the pad!</em> 🔐</div>
+
+</body>
+</html>

@@ -1,0 +1,21 @@
+[package]
+name    = "otp_xor"
+version = "0.2.0"           # bumped – semantic change
+edition = "2021"
+authors = ["You <you@example.com>"]
+
+[dependencies]
+clap      = { version = "4.5", features = ["derive"] }
+tempfile  = "3"
+zeroize   = "1"
+fs2       = "0.4"
+filetime  = "0.2"
+
+# Optional crates
+sha2      = { version = "0.10", optional = true }
+xattr     = { version = "1",     optional = true }
+
+[features]
+default   = []
+verify    = ["sha2"]        # SHA‑256 verification pass
+xattrs    = ["xattr"]       # copy extended attributes (Unix)
