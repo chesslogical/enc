@@ -1,0 +1,24 @@
+[package]
+name    = "dkey"
+version = "1.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Deterministic high‑strength key generator CLI"
+
+[dependencies]
+# cryptographic core
+argon2         = "0.5.3"
+blake3         = "1.8.2"
+
+# random stream option
+rand           = "0.8.5"
+rand_chacha    = "0.3.1"
+
+# CLI / UX
+clap           = { version = "4.5.40", features = ["derive", "wrap_help"] }
+rpassword      = "7.3.1"
+
+# misc safety / helpers
+base64         = "0.21.7"
+zeroize        = "1.7.0"
+subtle         = "2.5.0"

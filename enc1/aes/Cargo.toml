@@ -1,0 +1,21 @@
+[package]
+name    = "aes"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aes-gcm-siv = "0.11.1"        # ← no extra features
+anyhow      = "1.0"
+rand        = "0.8"
+tempfile    = "3.8"
+zeroize     = "1.7"
+clap        = { version = "4.5", features = ["derive"] }
+fs2         = "0.4"
+filetime    = "0.2"
+subtle      = "2.5"
+
+[profile.release]
+lto           = "fat"
+codegen-units = 1
+panic         = "abort"
+strip         = "symbols"

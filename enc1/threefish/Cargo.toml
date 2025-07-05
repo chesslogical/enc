@@ -1,0 +1,19 @@
+[package]
+name        = "threefish_cli"
+version     = "0.1.0"
+edition     = "2021"
+description = "Threefish‑1024 + HMAC‑SHA‑256 CLI file encryptor/decryptor"
+license     = "MIT"
+
+[dependencies]
+anyhow      = "1.0"
+argon2      = "0.5"      # ← NEW
+clap        = { version = "4.5.40", features = ["derive"] }
+hmac        = "0.12"
+num_cpus    = "1.16"     # ← NEW
+rand        = "0.8"
+rpassword   = "7.1"      # ← NEW
+sha2        = "0.10"
+tempfile    = "3.20"
+threefish   = "0.5"
+zeroize     = "1.8"
