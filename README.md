@@ -1,4 +1,4 @@
-
+# a bunch of encryption apps that ai made 
 
  Apps here are a starter kit for ppl new to rust to look at, use, feed to ai for audit or change. 
 
