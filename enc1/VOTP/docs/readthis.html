@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>votp 2.0 – One‑Time‑Pad &amp; Deterministic Key CLI</title>
+<title>vot 2.0 – One‑Time‑Pad &amp; Deterministic Key CLI</title>
 <style>
 body { font-family: system-ui, sans-serif; margin: 0 auto; padding: 2rem; max-width: 72rem; line-height: 1.55; }
 h1, h2, h3 { line-height: 1.2; }
@@ -19,217 +19,76 @@ kbd  { background:#eee;padding:.2em .4em;border-radius:4px;font-size:.9em;border
 
 <h1>votp 2.0 – Versatile OTP transformer &amp; deterministic key generator</h1>
 
-<p><strong>votp</strong> is a single Rust binary that now ships with <em>two</em> power‑tools:</p>
+<p><strong>votp</strong> is a single Rust binary that ships with two related tools:</p>
 
 <ol>
-<li><strong><kbd>xor</kbd></strong> &nbsp;— the original streaming one‑time‑pad (XOR) transformer</li>
-<li><strong><kbd>keygen</kbd></strong> — a deterministic, Argon2‑hardened key generator that turns a human password into high‑entropy key material of any size</li>
+<li><strong><kbd>xor</kbd></strong> &nbsp;— the original streaming one‑time‑pad <em>(OTP‑like)</em> transformer</li>
+<li><strong><kbd>keygen</kbd></strong> — a password‑to‑key generator hardened with Argon2id</li>
 </ol>
 
-<p>Both share the same security hygiene: constant‑memory streaming, atomic in‑place writes, optional SHA‑256 verification, Unix xattr preservation, and zeroisation of sensitive buffers.</p>
+<p><em>Important:</em> Keys produced by <kbd>keygen</kbd> are <strong>deterministic stream‑cipher keys, not perfect OTPs</strong>. Their security rests on the strength of your password <em>and</em> a unique salt that <strong>you must provide</strong>.</p>
 
 <hr>
 
 <h2>Feature matrix</h2>
 
 <ul>
-<li><code>default</code>     – <kbd>xor</kbd> only (leanest 300 kB binary)</li>
+<li><code>default</code>     – <kbd>xor</kbd> only (≈ 300 kB)</li>
 <li><code>verify</code>      – adds SHA‑256 printing / comparison</li>
 <li><code>xattrs</code>      – restores Unix extended attributes after <kbd>--in-place</kbd></li>
 <li><code>keygen</code>    – enables the deterministic key generator sub‑command</li>
 </ul>
 
-<p class="note">Features may be combined, e.g. <code>--features "verify keygen"</code>.</p>
+<hr>
+
+<h2>Keygen defaults (v 2.0.1)</h2>
+
+<ul>
+<li>Argon2id memory: <strong>64 MiB</strong></li>
+<li>Argon2id iterations: <strong>3</strong></li>
+<li><strong>A base‑64 salt is now mandatory</strong>; there is no global compile‑time salt any more.</li>
+</ul>
 
 <hr>
 
-<h2>Project layout</h2>
-
-<pre><code>.
-├── Cargo.toml
-├── README.html   ← this file
-└── src
-    ├── main.rs  ← CLI entry + OTP transformer
-    └── key.rs   ← deterministic key generator (feature = "keygen")
-</code></pre>
-
-<hr>
-
-<h2>Cargo.toml (excerpt)</h2>
-
-<pre><code class="language-toml">[package]
-name    = "votp"
-version = "2.0.0"
-edition = "2021"
-
-[features]
-default = []                    # xor only
-verify  = ["sha2", "atty"]
-xattrs  = ["xattr"]
-keygen  = ["argon2", "blake3", "base64", "rand", "rand_chacha",
-           "rpassword", "subtle"]</code></pre>
-
-
-<hr>
 <h2>Building</h2>
 
 <table>
 <thead><tr><th>Goal</th><th>Command</th><th>Size*</th></tr></thead>
 <tbody>
-<tr><td>OTP only (legacy)</td><td><pre><code class="language-bash">cargo build --release</code></pre></td><td>≈ 300 kB</td></tr>
+<tr><td>OTP only (legacy)</td><td><pre><code>cargo build --release</code></pre></td><td>≈ 300 kB</td></tr>
 
-<tr><td>OTP + SHA‑256 verify</td><td><pre><code class="language-bash">cargo build --release --features verify</code></pre></td><td>≈ 440 kB</td></tr>
+<tr><td>OTP + SHA‑256 verify</td><td><pre><code>cargo build --release --features verify</code></pre></td><td>≈ 440 kB</td></tr>
 
-<tr><td>OTP + Keygen</td><td><pre><code class="language-bash">cargo build --release --features keygen</code></pre></td><td>≈ 1.4 MB</td></tr>
+<tr><td>OTP + Keygen</td><td><pre><code>cargo build --release --features keygen</code></pre></td><td>≈ 1.2 MB</td></tr>
 
-<tr><td>Full kitchen‑sink</td><td><pre><code class="language-bash">cargo build --release --features "keygen verify xattrs"</code></pre></td><td>≈ 1.6 MB</td></tr>
+<tr><td>Full kitchen‑sink</td><td><pre><code>cargo build --release --features "keygen verify xattrs"</code></pre></td><td>≈ 1.4 MB</td></tr>
 </tbody>
 </table>
 
 <p class="note">*Stripped x86‑64 Linux numbers; will vary per platform.</p>
 
-
 <hr>
-<h2>Sub‑command overview</h2>
+<h2>Keygen usage (salt required)</h2>
 
-<h3><kbd>xor</kbd> – One‑Time‑Pad transformer (default)</h3>
-
-<pre><code class="language-text">votp xor [OPTIONS] --input &lt;FILE|-> --key &lt;FILE&gt; [--output &lt;FILE|-&gt;]  
-votp [OPTIONS]           (same, sub‑command inferred for backward compatibility)
-
-  -i, --input &lt;PATH|-&gt;          File to encrypt/decrypt or '-' for STDIN
-  -k, --key &lt;PATH&gt;              Key file (or $OTP_KEY, default 'key.key')
-  -o, --output &lt;PATH|-&gt;         Destination (ignored with --in-place)
-      --in-place                Atomic overwrite of --input
-      --min-len                 Require key ≥ data
-      --strict-len              Require key = data
-      --expect &lt;SHA256&gt;         (feature verify) compare hash after write
+<pre><code>votp keygen 32MiB --salt AABBCCDDEEFF...== --output key.bin
 </code></pre>
 
-<h3><kbd>keygen</kbd> – deterministic key maker <span class="note">(feature <code>keygen</code>)</span></h3>
-
-<pre><code class="language-text">votp keygen &lt;SIZE&gt; [--output FILE] [--algo blake3|chacha]
-                 [--salt BASE64] [--argon2-memory KB] [--argon2-time T]
-                 [--argon2-par P]
-
-  SIZE                  Human size (10kb, 4MiB, 1gib, …)
-  -o, --output FILE     Target file (default 'key.key')
-  -a, --algo            Output stream: blake3 (default) or chacha
-  -s, --salt BASE64     Optional base‑64 salt (compile‑time default otherwise)
-       --argon2-memory  Memory cost in KiB  (default 524 288 = 512 MiB)
-       --argon2-time    Iterations          (default 10)
-       --argon2-par     Parallel lanes      (default 1)
-</code></pre>
-
-<p>The generator asks for the password twice (no echo), derives a 32‑byte seed with Argon2id, then streams either BLAKE3‑XOF or ChaCha20 to disk.</p>
-
+<p>Choose a random 16‑byte (or longer) salt, encode with base‑64, and keep it
+alongside your password so the key can be reproduced.</p>
 
 <hr>
-<h2>Usage recipes</h2>
 
-<h3>0  Generate a strong key</h3>
-
-<table>
-<thead><tr><th></th><th>Linux / macOS</th><th>Windows (PowerShell)</th></tr></thead>
-<tbody><tr>
-<td>32 MiB (BLAKE3)</td>
-<td><pre><code class="language-bash">./votp keygen 32MiB --output key.bin</code></pre></td>
-<td><pre><code class="language-bash">.\votp.exe keygen 32MiB --output key.bin</code></pre></td>
-</tr><tr>
-<td>1 GiB (ChaCha, half RAM)</td>
-<td><pre><code class="language-bash">./votp keygen 1GiB --algo chacha --argon2-memory 262144 \
-                   --output key.bin</code></pre></td>
-<td><pre><code class="language-bash">.\votp.exe keygen 1GiB --algo chacha --argon2-memory 262144 `
-                      --output key.bin</code></pre></td>
-</tr></tbody></table>
-
-<p class="note">Use a <em>unique</em> password/salt pair per key universe. Changing either regenerates the <em>same</em> key sequence deterministically for disaster recovery.</p>
-
-
-<h3>1  Classic separate output file (unchanged)</h3>
-
-<table>
-<thead><tr><th></th><th>Linux / macOS</th><th>Windows (PowerShell)</th></tr></thead>
-<tbody><tr>
-<td>Encrypt</td>
-<td><pre><code class="language-bash">./votp -i example.txt  -k key.bin -o example.enc</code></pre></td>
-<td><pre><code class="language-bash">.\votp.exe -i example.txt  -k key.bin -o example.enc</code></pre></td>
-</tr><tr>
-<td>Decrypt</td>
-<td><pre><code class="language-bash">./votp -i example.enc -k key.bin -o example.dec</code></pre></td>
-<td><pre><code class="language-bash">.\votp.exe -i example.enc -k key.bin -o example.dec</code></pre></td>
-</tr></tbody></table>
-
-
-<h3>2  Atomic <code>--in-place</code> encryption</h3>
-
-<p class="note">Encrypt a copy in place, then decrypt into another file.</p>
-
-<table>
-<thead><tr><th></th><th>Linux / macOS</th><th>Windows (PowerShell)</th></tr></thead>
-<tbody><tr>
-<td>Copy plaintext</td>
-<td><pre><code class="language-bash">cp example.txt example2.txt</code></pre></td>
-<td><pre><code class="language-bash">Copy-Item example.txt example2.txt</code></pre></td>
-</tr><tr>
-<td>Encrypt in place</td>
-<td><pre><code class="language-bash">./votp -i example2.txt -k key.bin --in-place</code></pre></td>
-<td><pre><code class="language-bash">.\votp.exe -i example2.txt -k key.bin --in-place</code></pre></td>
-</tr><tr>
-<td>Decrypt elsewhere</td>
-<td><pre><code class="language-bash">./votp -i example2.txt -k key.bin -o example3.txt</code></pre></td>
-<td><pre><code class="language-bash">.\votp.exe -i example2.txt -k key.bin -o example3.txt</code></pre></td>
-</tr></tbody></table>
-
-
-<h3>3  Pure streaming (STDIN &rarr; STDOUT)</h3>
-
-<table>
-<thead><tr><th></th><th>Linux / macOS</th><th>Windows (PowerShell)</th></tr></thead>
-<tbody><tr>
-<td>Encrypt</td>
-<td><pre><code class="language-bash">cat example.txt \
-| ./votp -i - -k key.bin -o example.enc</code></pre></td>
-<td><pre><code class="language-bash">Get-Content -Raw example.txt `
-| .\votp.exe -i - -k key.bin -o example.enc</code></pre></td>
-</tr><tr>
-<td>Decrypt</td>
-<td><pre><code class="language-bash">cat example.enc \
-| ./votp -i - -k key.bin -o example.dec</code></pre></td>
-<td><pre><code class="language-bash">Get-Content -Raw example.enc `
-| .\votp.exe -i - -k key.bin -o example.dec</code></pre></td>
-</tr></tbody></table>
-
-
-<h2>Verifying a round‑trip (feature <code>verify</code>)</h2>
-
-<pre><code class="language-bash"># Encrypt + auto‑verify on the fly
-./votp --features verify -i example.txt -k key.bin -o example.enc \
-      --expect 0123...deadbeef       # compare SHA‑256 after writing
-</code></pre>
-
-<p>Or use a classic file hash tool:</p>
-
-<pre><code class="language-bash"># Linux / macOS
-cmp --silent example.txt example.dec && echo "Files are identical"
-
-# Windows
-certutil -hashfile example.txt SHA256
-certutil -hashfile example.dec SHA256</code></pre>
-
-
-<hr>
 <h2>Security reminders</h2>
 
 <ol>
 <li><strong>One key = one message.</strong> Never reuse OTP key bytes.</li>
 <li><strong>Key length ≥ message length</strong> for perfect secrecy. Use <kbd>--strict-len</kbd>.</li>
-<li>Deterministic keys (<kbd>keygen</kbd>) are only as strong as the password &amp; salt.<br>
-   Use long, unique, random pass‑phrases and keep salts secret if possible.</li>
+<li>Deterministic keys (<kbd>keygen</kbd>) inherit password &amp; salt strength; treat both like secrets.</li>
 <li>Transport and store key material with the same (or higher) confidentiality as the data it protects.</li>
 </ol>
 
-<p class="note">When <em>wrapping</em> short keys (<kbd>xor</kbd> default) you fall back to stream‑cipher strength—not an OTP.</p>
+<p class="note">When the key is shorter than the data (<kbd>xor</kbd> default), security degrades to stream‑cipher strength.</p>
 
 </body>
 </html>

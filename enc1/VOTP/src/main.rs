@@ -1,4 +1,5 @@
-//! votp 2.0 – versatile one‑time‑pad XOR transformer
+
+//! votp 2.1 – versatile one‑time‑pad XOR transformer
 //!            + deterministic key generator (`--features keygen`)
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -23,13 +24,34 @@ use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use filetime::{set_file_times, FileTime};
 
+#[cfg(unix)]
+use std::io::ErrorKind; // variant `CrossDeviceLink` exists only on Unix
+
+#[cfg(feature = "progress")]
+use indicatif::{ProgressBar, ProgressStyle};
+
 #[cfg(feature = "keygen")]
-mod key;                         // the new key generator module (src/key.rs)
+mod key; // the deterministic key generator module (src/key.rs)
 
 const BUF_CAP: usize = 64 * 1024; // 64 KiB streaming buffers
 const TMP_PREFIX: &str = ".votp-tmp-";
+const DEFAULT_KEY_FILE: &str = "key.key";
 
-/* ─────────────────────────────── CLI ──────────────────────────────────── */
+/* ─────────────────────────────── Helpers ─────────────────────────────── */
+
+/// True when the error represents a cross‑device rename failure
+fn is_cross_device(err: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        if err.kind() == ErrorKind::CrossDeviceLink {
+            return true;
+        }
+    }
+    // Fallback to raw OS error codes (EXDEV = 18 on POSIX, 17 on Windows)
+    matches!(err.raw_os_error(), Some(18 | 17))
+}
+
+/* ─────────────────────────────── CLI ─────────────────────────────────── */
 
 #[derive(Subcommand, Debug)]
 enum Command {
@@ -50,7 +72,7 @@ struct Cli {
     cmd: Option<Command>,
 }
 
-/// Flags for the XOR transformer (identical to the original tool)
+/// Flags for the XOR transformer
 #[derive(Parser, Debug)]
 struct XorArgs {
     /// Input file (use '-' for STDIN; '--in-place' forbidden with STDIN)
@@ -81,6 +103,11 @@ struct XorArgs {
     #[cfg(feature = "verify")]
     #[arg(long)]
     expect: Option<String>,
+
+    /// Show a live progress bar (requires `--features progress`)
+    #[cfg(feature = "progress")]
+    #[arg(long)]
+    progress: bool,
 }
 
 /* ───────────────────────────── main() ─────────────────────────────────── */
@@ -89,10 +116,7 @@ fn main() -> Result<()> {
     // If the first non‑binary argument is a known sub‑command, delegate to it;
     // otherwise we keep full backwards compatibility with the old flat XOR CLI.
     let first_non_bin = std::env::args().nth(1);
-    let looks_like_sub = matches!(
-        first_non_bin.as_deref(),
-        Some("xor") | Some("keygen")
-    );
+    let looks_like_sub = matches!(first_non_bin.as_deref(), Some("xor") | Some("keygen"));
 
     if looks_like_sub {
         let cli = Cli::parse();
@@ -116,7 +140,11 @@ fn run_xor(args: XorArgs) -> Result<()> {
     let key_path = args
         .key
         .or_else(|| std::env::var_os("OTP_KEY").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("key.key"));
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_KEY_FILE));
+
+    if !key_path.exists() {
+        bail!("key file '{}' does not exist", key_path.display());
+    }
 
     /* -------- source metadata (skip for STDIN) -------------------------- */
     let (data_len, src_meta_opt) = if args.input == PathBuf::from("-") {
@@ -125,6 +153,22 @@ fn run_xor(args: XorArgs) -> Result<()> {
         let m = fs::metadata(&args.input)
             .with_context(|| format!("reading metadata for '{}'", args.input.display()))?;
         (m.len(), Some(m))
+    };
+
+    /* -------- pre‑capture input xattrs (Unix, optional) ---------------- */
+    #[cfg(feature = "xattrs")]
+    let saved_xattrs: Vec<(std::ffi::OsString, Vec<u8>)> = if args.input != PathBuf::from("-") {
+        xattr::list(&args.input)
+            .unwrap_or_default()
+            .filter_map(|attr| {
+                xattr::get(&args.input, &attr)
+                    .ok()
+                    .flatten()
+                    .map(|val| (attr, val))
+            })
+            .collect()
+    } else {
+        Vec::new()
     };
 
     /* -------- key length checks ---------------------------------------- */
@@ -147,17 +191,28 @@ fn run_xor(args: XorArgs) -> Result<()> {
         );
     }
 
+    /* -------- warn on short‑key mode ----------------------------------- */
+    if data_len != 0 && key_len != data_len && !args.min_len && !args.strict_len {
+        eprintln!(
+            "⚠️  Key length ({key_len} bytes) differs from data length \
+({data_len} bytes). The key will repeat – cipher is **NOT** OTP‑strong."
+        );
+    }
+
     /* -------- prepare streams ------------------------------------------ */
 
-    // Key reader
+    // Key reader (now with fully‑qualified shared lock to silence lint)
     let mut key_file = File::open(&key_path)
         .with_context(|| format!("opening key '{}'", key_path.display()))?;
+    fs2::FileExt::lock_shared(&key_file)
+        .with_context(|| "locking key file for shared access")?;
+
+    /* dest_path_for_attrs is only needed when the xattrs feature is active */
+    #[cfg(feature = "xattrs")]
+    let mut dest_path_for_attrs: Option<PathBuf> = None;
 
     // Writer (tmp file when --in-place)
     let (mut writer, tmp_path): (Box<dyn Write>, Option<PathBuf>) = if args.in_place {
-        if args.input == PathBuf::from("-") {
-            bail!("--in-place cannot be used with STDIN");
-        }
         let dir = args
             .input
             .parent()
@@ -173,6 +228,10 @@ fn run_xor(args: XorArgs) -> Result<()> {
         }
 
         let (handle, path) = tmp.keep().context("persisting temporary file")?;
+        #[cfg(feature = "xattrs")]
+        {
+            dest_path_for_attrs = Some(args.input.clone());
+        }
         (Box::new(handle), Some(path))
     } else {
         let out_path = args
@@ -184,6 +243,10 @@ fn run_xor(args: XorArgs) -> Result<()> {
         } else {
             let f = File::create(&out_path)
                 .with_context(|| format!("creating output '{}'", out_path.display()))?;
+            #[cfg(feature = "xattrs")]
+            {
+                dest_path_for_attrs = Some(out_path.clone());
+            }
             (Box::new(f), None)
         }
     };
@@ -201,10 +264,25 @@ fn run_xor(args: XorArgs) -> Result<()> {
         Box::new(f)
     };
 
+    /* -------- optional progress bar ------------------------------------ */
+    #[cfg(feature = "progress")]
+    let bar = if args.progress {
+        let pb = ProgressBar::new(data_len);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} ({eta})",
+            )
+            .unwrap(),
+        );
+        Some(pb)
+    } else {
+        None
+    };
+
     /* -------- streaming XOR loop --------------------------------------- */
 
     let mut data_buf = vec![0u8; BUF_CAP];
-    let mut key_buf  = vec![0u8; BUF_CAP];
+    let mut key_buf = vec![0u8; BUF_CAP];
 
     #[cfg(feature = "verify")]
     let mut hasher_opt = if args.expect.is_some() {
@@ -225,14 +303,24 @@ fn run_xor(args: XorArgs) -> Result<()> {
 
         #[cfg(feature = "verify")]
         if let Some(ref mut h) = hasher_opt {
-            h.update(&data_buf[..n]);     // hash in‑flight (no 2nd disk pass)
+            h.update(&data_buf[..n]); // hash in‑flight (no 2nd disk pass)
         }
 
         writer.write_all(&data_buf[..n])?;
         data_buf[..n].zeroize();
         key_buf[..n].zeroize();
+
+        #[cfg(feature = "progress")]
+        if let Some(ref pb) = bar {
+            pb.inc(n as u64);
+        }
     }
     writer.flush()?;
+
+    #[cfg(feature = "progress")]
+    if let Some(pb) = bar {
+        pb.finish_and_clear();
+    }
 
     /* -------- durability fences & in‑place swap ------------------------ */
     if let Some(ref tmp) = tmp_path {
@@ -252,23 +340,44 @@ fn run_xor(args: XorArgs) -> Result<()> {
                 fs::set_permissions(&args.input, perms)?;
             }
         }
-        fs::rename(&tmp, &args.input).context("atomic rename failed")?;
+
+        match fs::rename(&tmp, &args.input) {
+            Ok(_) => {}
+            Err(e) if is_cross_device(&e) => {
+                // cross‑device: fall back to copy + atomic overwrite
+                fs::copy(&tmp, &args.input).with_context(|| "cross‑device copy")?;
+
+                // --- fsync destination for full durability -----------------
+                {
+                    let dest = OpenOptions::new().write(true).open(&args.input)?;
+                    dest.sync_all()?;
+                }
+                if let Some(parent) = args.input.parent() {
+                    if let Ok(dir) = File::open(parent) {
+                        let _ = dir.sync_all();
+                    }
+                }
+
+                fs::remove_file(&tmp)?;
+            }
+            Err(e) => return Err(e.into()),
+        }
 
         #[cfg(unix)]
         {
             if let Some(src_meta) = src_meta_opt {
                 let atime = FileTime::from_last_access_time(&src_meta);
                 let mtime = FileTime::from_last_modification_time(&src_meta);
-                set_file_times(&args.input, atime, mtime)
-                    .context("restoring timestamps")?;
+                set_file_times(&args.input, atime, mtime).context("restoring timestamps")?;
             }
+        }
+    }
 
-            #[cfg(feature = "xattrs")]
-            for attr in xattr::list(&key_path).unwrap_or_default() {
-                if let Some(val) = xattr::get(&key_path, &attr).unwrap_or(None) {
-                    let _ = xattr::set(&args.input, &attr, &val);
-                }
-            }
+    /* -------- restore xattrs (Unix, optional) -------------------------- */
+    #[cfg(feature = "xattrs")]
+    if let Some(ref dest) = dest_path_for_attrs {
+        for (attr, val) in &saved_xattrs {
+            let _ = xattr::set(dest, attr, val);
         }
     }
 
@@ -299,16 +408,21 @@ fn run_xor(args: XorArgs) -> Result<()> {
 /* ───────────────────────────── Helpers ─────────────────────────────────── */
 
 /// Fill `dest` completely with bytes from `key`, rewinding on EOF.
+/// Abort if the key file disappears while streaming.
 fn fill_key_slice<R: Read + Seek>(key: &mut R, dest: &mut [u8]) -> Result<()> {
     let mut filled = 0;
     while filled < dest.len() {
         let n = key.read(&mut dest[filled..])?;
         if n == 0 {
             key.seek(SeekFrom::Start(0))?;
-            continue;
+            let n2 = key.read(&mut dest[filled..])?;
+            if n2 == 0 {
+                bail!("key file is empty or became unreadable during processing");
+            }
+            filled += n2;
+        } else {
+            filled += n;
         }
-        filled += n;
     }
     Ok(())
 }
-
