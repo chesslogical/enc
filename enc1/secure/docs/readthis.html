@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>secure 2.1 – Versatile File‑Crypto CLI (OTP / AES / Keygen)</title>
+
+<style>
+body { font-family: system-ui, sans-serif; margin:0 auto; padding:2rem; max-width:72rem; line-height:1.55; }
+h1,h2,h3 { line-height:1.25; }
+code  { font-family: ui-monospace, SFMono-Regular, monospace; }
+pre   { background:#f6f8fa; padding:1rem; overflow-x:auto; border-radius:6px; }
+pre code { font-size:.95em; }
+table { border-collapse:collapse; }
+th,td { padding:.45em .8em; border:1px solid #d0d7de; vertical-align:top; }
+.note { font-size:.9em; color:#555; }
+kbd  { background:#eee; padding:.2em .45em; border-radius:4px; font-size:.9em; border:1px solid #ccc; }
+details summary { cursor:pointer; margin:.6em 0; font-weight:600; }
+</style>
+</head>
+
+<body>
+
+<h1>secure 2.1 – streaming OTP transformer • AES‑GCM‑SIV encryptor • deterministic key generator</h1>
+
+<p><strong>secure</strong> is a single Rust binary that now ships <em>three</em> self‑contained utilities:</p>
+
+<ol>
+  <li><strong><kbd>xor</kbd></strong> &nbsp;— high‑performance one‑time‑pad‑style XOR transformer (file/STDIN).</li>
+  <li><strong><kbd>aes</kbd></strong> &nbsp;— authenticated AES‑256‑GCM‑SIV file encryption/decryption.</li>
+  <li><strong><kbd>keygen</kbd></strong> — hardened Argon2id password → stream‑cipher‑key generator.</li>
+</ol>
+
+<p><em>Caveat:</em> Keys from <kbd>keygen</kbd> are cryptographically strong <em>deterministic</em> stream keys, **not** perfect OTPs. Security depends on your password <em>and</em> a unique salt <strong>you supply</strong>.</p>
+
+<hr>
+
+<h2 id="why">Why use <code>secure</code>?</h2>
+
+<ul>
+  <li><strong>Compact static binaries</strong> (≈ 1 MB stripped with default features).</li>
+  <li><strong>No <code>unsafe</code> code.</strong></li>
+  <li><strong>Zero‑on‑drop hygiene.</strong> Key material is wiped from RAM.</li>
+  <li><strong>Atomic, cross‑platform in‑place encryption</strong> (temp file + rename, fallback copy‑swap).</li>
+  <li><strong>Feature‑gated code paths</strong> — Unix‑only xattrs compile only when asked.</li>
+  <li><strong>No network, no telemetry.</strong> Pure local processing.</li>
+</ul>
+
+<hr>
+
+<h2>Compile&nbsp;·&nbsp;Install</h2>
+
+<table>
+<thead><tr><th>Goal</th><th>Command</th></tr></thead>
+<tbody>
+<tr><td>Default build (OTP + AES + Keygen + Verify + Progress)<br><span class="note">Works on Windows, macOS, Linux</span></td>
+    <td><pre><code>cargo build --release</code></pre></td></tr>
+<tr><td>Add Unix extended‑attribute preservation</td>
+    <td><pre><code>cargo build --release --features xattrs</code></pre></td></tr>
+<tr><td>Minimal lean OTP‑only binary</td>
+    <td><pre><code>cargo build --release --no-default-features</code></pre></td></tr>
+</tbody>
+</table>
+
+<p class="note">Binaries are located in <code>target/release/</code>. Rename or copy to <code>secure</code> somewhere in your <code>$PATH</code>.</p>
+
+<hr>
+
+<h2>Command reference &amp; examples (encrypting <code>example.txt</code>)</h2>
+
+<!-- XOR ----------------------------------------------------------------- -->
+<details open>
+<summary><kbd>xor</kbd> – streaming one‑time‑pad transformer</summary>
+
+<h3>Synopsis</h3>
+<pre><code>secure xor --input &lt;FILE|-&gt; --key &lt;PATH&gt; [options]</code></pre>
+
+<table>
+<thead><tr><th>Flag / arg</th><th>Description</th><th>Example (→ <code>example.enc</code>)</th></tr></thead>
+<tbody>
+<tr><td><code>-i, --input PATH</code></td><td>Source (use <code>-</code> for STDIN)</td><td><code>-i example.txt</code></td></tr>
+<tr><td><code>-k, --key PATH</code></td><td>Key file (defaults <code>$OTP_KEY</code> or <code>key.key</code>)</td><td><code>-k key.bin</code></td></tr>
+<tr><td><code>-o, --output PATH</code></td><td>Destination (use <code>-</code> for STDOUT)</td><td><code>-o example.enc</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--in-place</code></td><td>Encrypt/decrypt atomically over the input file</td><td><code>--in-place</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--min-len</code></td><td>Abort if key&nbsp;&lt;&nbsp;data length</td><td><code>--min-len</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--strict-len</code></td><td>Require key&nbsp;== data length (classical OTP)</td><td><code>--strict-len</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--expect HASH</code><br><span class="note">(verify feature)</span></td><td>Print or compare SHA‑256 of output</td><td><code>--expect deadbeef…</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--progress</code><br><span class="note">(progress feature)</span></td><td>Live progress bar</td><td><code>--progress</code></td></tr>
+</tbody>
+</table>
+
+<h4>Encrypt <code>example.txt</code> with a 32‑byte key (repeats as needed)</h4>
+<pre><code>secure xor -i example.txt -k key32.bin -o example.enc</code></pre>
+
+<h4>Classical OTP (key length = file length)</h4>
+<pre><code># key.bin must be identical length
+secure xor -i example.txt -k key.bin --strict-len -o example.enc</code></pre>
+
+<h4>In‑place decryption to STDOUT &amp; verify SHA‑256</h4>
+<pre><code>secure xor --input example.enc --key key32.bin --expect 0123… -o - &gt; example.txt</code></pre>
+</details>
+
+<!-- AES ----------------------------------------------------------------- -->
+<details>
+<summary><kbd>aes</kbd> – AES‑256‑GCM‑SIV authenticated encryption</summary>
+
+<h3>Synopsis</h3>
+<pre><code>secure aes [--encrypt|--decrypt] &lt;FILE&gt; [--out PATH]</code></pre>
+
+<table>
+<thead><tr><th>Flag / arg</th><th>Description</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td><code>&nbsp;&nbsp;--encrypt</code></td><td>Force encryption (otherwise auto‑detect)</td><td><code>--encrypt</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--decrypt</code></td><td>Force decryption</td><td><code>--decrypt</code></td></tr>
+<tr><td><code>&lt;FILE&gt;</code></td><td>Target file (over‑written unless <code>--out</code>)</td><td><code>example.txt</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--out PATH</code></td><td>Write output elsewhere</td><td><code>--out example.enc</code></td></tr>
+</tbody>
+</table>
+
+<h4>Encrypt <code>example.txt</code> → <code>example.aes</code></h4>
+<pre><code>secure aes --encrypt example.txt --out example.aes</code></pre>
+
+<h4>Decrypt in place (auto‑detect format)</h4>
+<pre><code>secure aes example.aes   # produces example.aes (decrypted)</code></pre>
+</details>
+
+<!-- KEYGEN --------------------------------------------------------------- -->
+<details>
+<summary><kbd>keygen</kbd> – deterministic key material generator</summary>
+
+<h3>Synopsis</h3>
+<pre><code>secure keygen SIZE --salt BASE64 [options]</code></pre>
+
+<table>
+<thead><tr><th>Flag / arg</th><th>Description</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td><code>SIZE</code></td><td>10kb, 5MiB, 1gib …</td><td><code>32MiB</code></td></tr>
+<tr><td><code>-o, --output PATH</code></td><td>Where to write key (default <code>key.key</code>)</td><td><code>-o key.bin</code></td></tr>
+<tr><td><code>-a, --algo blake3|chacha</code></td><td>Stream generator (default blake3)</td><td><code>-a chacha</code></td></tr>
+<tr><td><code>-s, --salt BASE64</code></td><td><strong>Mandatory</strong> unique salt (&ge; 12 chars)</td><td><code>-s b3BlbnNlc2FtZQ==</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--gen-salt N</code></td><td>Print fresh random base‑64 salt (N bytes) &amp; exit</td><td><code>--gen-salt 16</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--argon2-memory KiB</code></td><td>RAM (default 65536)</td><td><code>--argon2-memory 131072</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--argon2-time N</code></td><td>Iterations (default 3)</td><td><code>--argon2-time 4</code></td></tr>
+<tr><td><code>&nbsp;&nbsp;--argon2-par N</code></td><td>Lanes (default 1)</td><td><code>--argon2-par 4</code></td></tr>
+</tbody>
+</table>
+
+<h4>Generate a key and encrypt <code>example.txt</code> (OTP mode)</h4>
+<pre><code># 1) fresh random salt
+salt=$(secure keygen --gen-salt 16)
+
+# 2) derive 1 MiB key
+secure keygen 1MiB --salt "$salt" -o key.bin
+
+# 3) encrypt using XOR
+secure xor -i example.txt -k key.bin -o example.enc</code></pre>
+</details>
+
+<hr>
+
+<h2>Security checklist</h2>
+
+<ol>
+  <li><strong>Never reuse OTP bytes.</strong> One key per message for information‑theoretic secrecy.</li>
+  <li><strong>Match key length to data length</strong> when you need perfect OTP security (<kbd>--strict-len</kbd>).</li>
+  <li>Deterministic keys (<kbd>keygen</kbd>) rely on strong passwords <em>and</em> unique salts.</li>
+  <li>Protect key material at least as well as the ciphertext.</li>
+</ol>
+
+<p class="note">If the key is reused or shorter than the data, confidentiality degrades to that of a standard stream cipher.</p>
+
+<hr>
+
+<footer class="note">© 2025 &nbsp;MIT / Apache‑2.0 dual license — project renamed from <em>votp</em> to <em>secure</em>.</footer>
+
+</body>
+</html>
